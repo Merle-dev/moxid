@@ -16,7 +16,8 @@
         "decorations": false,
         "title": "moxid",
         "width": 1800,
-        "height": 1000
+        "height": 1000,
+        "visible": true
       }
     ],
     "security": {

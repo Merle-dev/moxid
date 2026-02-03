@@ -3,6 +3,7 @@
   inputs =
     {
       nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable"; # or whatever vers
+      nixpkgs-stable.url = "github:nixos/nixpkgs/nixos-23.11";
     };
   
   outputs = { self, nixpkgs, ... }@inputs:
@@ -20,6 +21,7 @@
           pkg-config
           librsvg
           lld
+          xdg-utils
           webkitgtk_4_1
         ]; # whatever you need
       };
