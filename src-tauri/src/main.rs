@@ -2,5 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    std::env::set_var("GDK_BACKEND", "x11");
     moxid_lib::run()
 }
