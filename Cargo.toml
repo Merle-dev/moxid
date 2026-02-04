@@ -17,6 +17,8 @@ styled = "0.3.2"
 web-sys = "0.3.85"
 anyhow = "1.0.100"
 leptos_reactive = "0.6.15"
+log = "0.4.29"
+itertools = "0.14.0"
 
 [workspace]
 members = ["src-tauri"]

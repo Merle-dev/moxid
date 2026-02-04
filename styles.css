@@ -89,6 +89,10 @@ body {
     border-radius: 0.5rem;  /* instead of 4px */
     cursor: pointer;
     font-size: 1.125rem;
+    display: block;
+    white-space: nowrap;      /* Keep on one line */
+    overflow: hidden;         /* Hide extra content */
+    text-overflow: ellipsis; 
     transition: background-color 0.2s;
 }
 

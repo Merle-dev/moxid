@@ -1,9 +1,6 @@
 use anyhow::Result;
 use katex::{render_with_opts, Opts};
-use leptos::leptos_dom::logging::console_log;
-use leptos::task::spawn_local;
-use leptos::{leptos_dom::logging, prelude::*};
-use leptos_reactive::{create_local_resource, SignalGet};
+use leptos::{logging::*, prelude::*};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use styled::style;
 use wasm_bindgen::prelude::*;
@@ -12,35 +9,24 @@ use web_sys::console::info;
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"])]
-    async fn invoke_c(cmd: &str, args: JsValue) -> JsValue;
+    async fn invoke(cmd: &str, args: JsValue) -> JsValue;
 }
 
-#[component]
-pub fn Latex(#[prop(into)] formula: String, #[prop(optional)] display_mode: bool) -> impl IntoView {
-    let opts = Opts::builder().display_mode(display_mode).build().unwrap();
-
-    let html = render_with_opts(&formula, &opts)
-        .unwrap_or_else(|_| format!("Error rendering: {}", formula));
-
-    view! {
-        <span class="formula" inner_html=html />
-    }
-}
-
-async fn invoke<R: DeserializeOwned>(
+async fn call_tauri<R: DeserializeOwned>(
     cmd: &str,
     input: impl Serialize,
 ) -> Result<R, serde_wasm_bindgen::Error> {
-    let result = invoke_c(cmd, serde_wasm_bindgen::to_value(&input)?).await;
+    let result = invoke(cmd, serde_wasm_bindgen::to_value(&input)?).await;
     serde_wasm_bindgen::from_value::<R>(result)
 }
 
 #[component]
 pub fn App() -> impl IntoView {
     let path = String::from("./");
+    log!("starting wasm app");
     view! {
         <div class="container">
-            <SideBar path />
+            <SideBar path=path />
             <main class="main-content">
             <div class="editor-header">
                 <span class="editor-title">Welcome Note</span>
@@ -62,47 +48,63 @@ struct FileRequest {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct File {
     name: String,
+    directory: bool,
 }
 
 #[component]
 pub fn SideBar(path: String) -> impl IntoView {
-    let (path, set_path) = create_signal(path);
-    // let fetch_files = |path| async move {
-    //     invoke::<Vec<File>>("files", FileRequest { path })
-    //         .await
-    //         .unwrap()
-    // };
-    let resource = create_local_resource(
-        move || path.get(),
-        move |path| async move {
-            match invoke::<Vec<File>>("files", FileRequest { path }).await {
-                Ok(files) => {
-                    console_log(&format!("Fetched {} files", files.len()));
-                    files
-                }
-                Err(e) => {
-                    log::error!("Error fetching files: {:?}", e);
-                    vec![]
-                }
-            }
-        },
-    );
+    let (path, set_path) = signal(path);
+    let data = LocalResource::new(move || async move {
+        call_tauri::<Vec<File>>("files", FileRequest { path: path.get() })
+            .await
+            .unwrap()
+    });
     view! {
-            <aside class="sidebar">
+        <aside class="sidebar">
                 <div class="sidebar-header">
                     FILES
                 </div>
-                <Suspense fallback=|| view! { <p>"Loading..."</p> }>
-                    <div class="sidebar-content">
-                    {move || resource.get().map(|files: Vec<File>| {
-                        files.iter().enumerate()
-                            .map(|(n, file)| view! { <li class="sidebar-item">{n}</li> })
-                            .collect_view()
-                        })
+                <div class="sidebar-container">
+                <button on:click=move |_| set_path.set(format!("../"))>"<"</button>
+                {
+                    move || match data.get() {
+                        Some(result) => result.into_iter().map(|file| view! { <SideBarItem file setter=set_path /> }).collect_view().into_any(),
+                        None => view! { <p> "loading" </p>}.into_any()
                     }
-                    </div>
-                </Suspense>
+                }
+                </div>
             </aside>
 
+
+    }
+}
+
+#[component]
+pub fn SideBarItem(file: File, setter: WriteSignal<String>) -> impl IntoView {
+    let icon = if file.directory { "📁" } else { "📄" };
+    let name = file.name.clone();
+    let click = move |_| {
+        if file.directory {
+            log!("cd to {}", file.name);
+            setter.set(file.name.clone());
+        }
+    };
+    view! {
+        <div class="sidebar-item" on:click=click>
+            {icon}
+            {name}
+        </div>
+    }
+}
+
+#[component]
+pub fn Latex(#[prop(into)] formula: String, #[prop(optional)] display_mode: bool) -> impl IntoView {
+    let opts = Opts::builder().display_mode(display_mode).build().unwrap();
+
+    let html = render_with_opts(&formula, &opts)
+        .unwrap_or_else(|_| format!("Error rendering: {}", formula));
+
+    view! {
+        <span class="formula" inner_html=html />
     }
 }

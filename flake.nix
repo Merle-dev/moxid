@@ -1,5 +1,5 @@
 {
-  description = "Oxid flake";
+  description = "Moxid flake";
   inputs =
     {
       nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable"; # or whatever vers
@@ -27,3 +27,4 @@
       };
     };
 }
+
