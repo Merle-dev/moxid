@@ -1,19 +1,18 @@
+use anyhow::Result;
 use katex::{render_with_opts, Opts};
-use leptos::prelude::*;
+use leptos::leptos_dom::logging::console_log;
 use leptos::task::spawn_local;
-use serde::{Deserialize, Serialize};
+use leptos::{leptos_dom::logging, prelude::*};
+use leptos_reactive::{create_local_resource, SignalGet};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use styled::style;
 use wasm_bindgen::prelude::*;
+use web_sys::console::info;
 
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"])]
-    async fn invoke(cmd: &str, args: JsValue) -> JsValue;
-}
-
-#[derive(Serialize, Deserialize)]
-struct GreetArgs<'a> {
-    name: &'a str,
+    async fn invoke_c(cmd: &str, args: JsValue) -> JsValue;
 }
 
 #[component]
@@ -27,12 +26,21 @@ pub fn Latex(#[prop(into)] formula: String, #[prop(optional)] display_mode: bool
         <span class="formula" inner_html=html />
     }
 }
+
+async fn invoke<R: DeserializeOwned>(
+    cmd: &str,
+    input: impl Serialize,
+) -> Result<R, serde_wasm_bindgen::Error> {
+    let result = invoke_c(cmd, serde_wasm_bindgen::to_value(&input)?).await;
+    serde_wasm_bindgen::from_value::<R>(result)
+}
+
 #[component]
 pub fn App() -> impl IntoView {
-    use leptos::*;
+    let path = String::from("./");
     view! {
         <div class="container">
-            <SideBar />
+            <SideBar path />
             <main class="main-content">
             <div class="editor-header">
                 <span class="editor-title">Welcome Note</span>
@@ -46,21 +54,54 @@ pub fn App() -> impl IntoView {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct FileRequest {
+    path: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct File {
+    name: String,
+}
+
 #[component]
-pub fn SideBar() -> impl IntoView {
+pub fn SideBar(path: String) -> impl IntoView {
+    let (path, set_path) = create_signal(path);
+    // let fetch_files = |path| async move {
+    //     invoke::<Vec<File>>("files", FileRequest { path })
+    //         .await
+    //         .unwrap()
+    // };
+    let resource = create_local_resource(
+        move || path.get(),
+        move |path| async move {
+            match invoke::<Vec<File>>("files", FileRequest { path }).await {
+                Ok(files) => {
+                    console_log(&format!("Fetched {} files", files.len()));
+                    files
+                }
+                Err(e) => {
+                    log::error!("Error fetching files: {:?}", e);
+                    vec![]
+                }
+            }
+        },
+    );
     view! {
             <aside class="sidebar">
                 <div class="sidebar-header">
                     FILES
                 </div>
-                <div class="sidebar-content"> {
-                    (1..10)
-                        .into_iter()
-                        .map(|n| view!{ <li class="sidebar-item">{n}</li> })
-                        .collect_view()
-
-                }
-                </div>
+                <Suspense fallback=|| view! { <p>"Loading..."</p> }>
+                    <div class="sidebar-content">
+                    {move || resource.get().map(|files: Vec<File>| {
+                        files.iter().enumerate()
+                            .map(|(n, file)| view! { <li class="sidebar-item">{n}</li> })
+                            .collect_view()
+                        })
+                    }
+                    </div>
+                </Suspense>
             </aside>
 
     }
