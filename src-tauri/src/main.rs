@@ -13,6 +13,7 @@ struct File {
 
 #[tauri::command]
 fn files(path: String) -> Result<Vec<File>, String> {
+    println!("File from {path}");
     let files: Result<Vec<File>, String> = std::fs::read_dir(&path)
         .map_err(|_| format!("Failed to read directory: {path}"))?
         .map(|entry_result| {
@@ -37,6 +38,13 @@ fn files(path: String) -> Result<Vec<File>, String> {
     files.map(sort)
 }
 
+#[tauri::command]
+fn directory() -> Result<String, String> {
+    std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| format!("{e}"))
+}
+
 fn compare(a: &File, b: &File) -> Ordering {
     b.directory.cmp(&a.directory).then(a.name.cmp(&b.name))
 }
@@ -50,11 +58,13 @@ fn cc(invoke_message: String) {
 }
 
 fn main() {
+    let path = std::env::current_dir().unwrap();
+    println!("The current directory is {}", path.display());
     unsafe {
         std::env::set_var("GDK_BACKEND", "x11");
     }
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![files, cc])
+        .invoke_handler(tauri::generate_handler![files, directory])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

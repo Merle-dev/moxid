@@ -1,13 +1,12 @@
 use anyhow::Result;
-use katex::{render_with_opts, Opts};
-use leptos::{logging::*, prelude::*};
+use leptos::{logging::*, prelude::*, reactive::spawn_local};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use styled::style;
 use wasm_bindgen::prelude::*;
-use web_sys::console::info;
 
 #[wasm_bindgen]
 extern "C" {
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"], js_name = invoke)]
+    async fn invoke_without_args(cmd: &str) -> JsValue;
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"])]
     async fn invoke(cmd: &str, args: JsValue) -> JsValue;
 }
@@ -19,23 +18,62 @@ async fn call_tauri<R: DeserializeOwned>(
     let result = invoke(cmd, serde_wasm_bindgen::to_value(&input)?).await;
     serde_wasm_bindgen::from_value::<R>(result)
 }
+mod editor_path {
+    use leptos::prelude::*;
+
+    use crate::app::{invoke, invoke_without_args};
+
+    pub async fn new() -> Vec<String> {
+        let mut path: Vec<String> =
+            serde_wasm_bindgen::from_value::<String>(invoke_without_args("directory").await)
+                .unwrap()
+                .split('/')
+                .map(String::from)
+                .collect();
+        path.remove(0);
+        leptos::logging::log!("{:?}", path);
+        path
+    }
+    pub fn add(path: WriteSignal<Vec<String>>, addition: String) {
+        path.update(|v| v.push(addition));
+    }
+    pub fn pop(path: WriteSignal<Vec<String>>) {
+        path.update(|v| {
+            v.pop();
+        });
+    }
+    pub fn get(path: ReadSignal<Vec<String>>) -> String {
+        path.get()
+            .iter()
+            .map(|s| format!("/{s}"))
+            .collect::<String>()
+    }
+}
 
 #[component]
 pub fn App() -> impl IntoView {
-    let path = String::from("./");
     log!("starting wasm app");
+    let (path, set_path) = signal(Vec::<String>::new());
+    spawn_local(async move {
+        set_path.set(editor_path::new().await);
+    });
+    let a = LocalResource::new(|| async move { editor_path::new().await });
     view! {
         <div class="container">
-            <SideBar path=path />
+            <SideBar path set_path />
             <main class="main-content">
             <div class="editor-header">
-                <span class="editor-title">Welcome Note</span>
+                {
+                    move || match a.get().and_then(|v| v.last().cloned()) {
+                        Some(p) => view! { <span class="editor-title"> { p } </span> }.into_any(),
+                        None =>  view! { <span class="editor-title">"loading"</span> }.into_any(),
+                    }
+                }
             </div>
             <div class="editor-container">
                 <textarea class="text-field" placeholder="Start typing your notes here..."></textarea>
             </div>
         </main>
-            // <Latex formula=r#"-p\pm \sqrt{(\frac{p}{2})^2-q}"# display_mode=true />
         </div>
     }
 }
@@ -46,18 +84,23 @@ struct FileRequest {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct File {
+pub struct File {
     name: String,
+    // path: Vec<String>,
     directory: bool,
 }
 
 #[component]
-pub fn SideBar(path: String) -> impl IntoView {
-    let (path, set_path) = signal(path);
+pub fn SideBar(path: ReadSignal<Vec<String>>, set_path: WriteSignal<Vec<String>>) -> impl IntoView {
     let data = LocalResource::new(move || async move {
-        call_tauri::<Vec<File>>("files", FileRequest { path: path.get() })
-            .await
-            .unwrap()
+        call_tauri::<Vec<File>>(
+            "files",
+            FileRequest {
+                path: editor_path::get(path),
+            },
+        )
+        .await
+        .unwrap()
     });
     view! {
         <aside class="sidebar">
@@ -65,10 +108,11 @@ pub fn SideBar(path: String) -> impl IntoView {
                     FILES
                 </div>
                 <div class="sidebar-container">
-                <button on:click=move |_| set_path.set(format!("../"))>"<"</button>
+                <button on:click=move |_| editor_path::pop(set_path)>"Pop"</button>
+                <button on:click=move |_| set_path.set((0..10).into_iter().map(|n| n.to_string()).collect())>"Load"</button>
                 {
                     move || match data.get() {
-                        Some(result) => result.into_iter().map(|file| view! { <SideBarItem file setter=set_path /> }).collect_view().into_any(),
+                        Some(result) => result.into_iter().map(|file| view! { <SideBarItem file path=set_path /> }).collect_view().into_any(),
                         None => view! { <p> "loading" </p>}.into_any()
                     }
                 }
@@ -80,14 +124,12 @@ pub fn SideBar(path: String) -> impl IntoView {
 }
 
 #[component]
-pub fn SideBarItem(file: File, setter: WriteSignal<String>) -> impl IntoView {
+pub fn SideBarItem(file: File, path: WriteSignal<Vec<String>>) -> impl IntoView {
     let icon = if file.directory { "📁" } else { "📄" };
     let name = file.name.clone();
     let click = move |_| {
-        if file.directory {
-            log!("cd to {}", file.name);
-            setter.set(file.name.clone());
-        }
+        log!("cd to {}", file.name);
+        editor_path::add(path, file.name.clone());
     };
     view! {
         <div class="sidebar-item" on:click=click>
@@ -97,14 +139,14 @@ pub fn SideBarItem(file: File, setter: WriteSignal<String>) -> impl IntoView {
     }
 }
 
-#[component]
-pub fn Latex(#[prop(into)] formula: String, #[prop(optional)] display_mode: bool) -> impl IntoView {
-    let opts = Opts::builder().display_mode(display_mode).build().unwrap();
+// #[component]
+// pub fn Latex(#[prop(into)] formula: String, #[prop(optional)] display_mode: bool) -> impl IntoView {
+//     let opts = Opts::builder().display_mode(display_mode).build().unwrap();
 
-    let html = render_with_opts(&formula, &opts)
-        .unwrap_or_else(|_| format!("Error rendering: {}", formula));
+//     let html = render_with_opts(&formula, &opts)
+//         .unwrap_or_else(|_| format!("Error rendering: {}", formula));
 
-    view! {
-        <span class="formula" inner_html=html />
-    }
-}
+//     view! {
+//         <span class="formula" inner_html=html />
+//     }
+// }
