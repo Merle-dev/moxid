@@ -18,67 +18,86 @@ async fn call_tauri<R: DeserializeOwned>(
     let result = invoke(cmd, serde_wasm_bindgen::to_value(&input)?).await;
     serde_wasm_bindgen::from_value::<R>(result)
 }
-mod editor_path {
-    use leptos::prelude::*;
 
-    use crate::app::{invoke, invoke_without_args};
+type PathReader = ReadSignal<(Vec<String>, PathType)>;
+type PathWriter = WriteSignal<(Vec<String>, PathType)>;
 
-    pub async fn new() -> Vec<String> {
-        let mut path: Vec<String> =
-            serde_wasm_bindgen::from_value::<String>(invoke_without_args("directory").await)
-                .unwrap()
-                .split('/')
-                .map(String::from)
-                .collect();
-        path.remove(0);
-        leptos::logging::log!("{:?}", path);
-        path
-    }
-    pub fn add(path: WriteSignal<Vec<String>>, addition: String) {
-        path.update(|v| v.push(addition));
-    }
-    pub fn pop(path: WriteSignal<Vec<String>>) {
-        path.update(|v| {
-            v.pop();
-        });
-    }
-    pub fn get(path: ReadSignal<Vec<String>>) -> String {
-        path.get()
-            .iter()
-            .map(|s| format!("/{s}"))
-            .collect::<String>()
-    }
+pub async fn new() -> Vec<String> {
+    let mut path: Vec<String> =
+        serde_wasm_bindgen::from_value::<String>(invoke_without_args("directory").await)
+            .unwrap()
+            .split('/')
+            .map(String::from)
+            .collect();
+    path.remove(0);
+    leptos::logging::log!("{:?}", path);
+    path
+}
+
+pub fn get(path: Vec<String>) -> String {
+    path.iter().map(|s| format!("/{s}")).collect::<String>()
 }
 
 #[component]
 pub fn App() -> impl IntoView {
     log!("starting wasm app");
-    let (path, set_path) = signal(Vec::<String>::new());
+    let (path_reader, path_writer) = signal((Vec::<String>::new(), PathType::Directory));
     spawn_local(async move {
-        set_path.set(editor_path::new().await);
+        path_writer.set((new().await, PathType::Directory));
     });
-    let a = LocalResource::new(|| async move { editor_path::new().await });
+    let a = LocalResource::new(|| async move { (new().await, PathType::Directory) });
     view! {
         <div class="container">
-            <SideBar path set_path />
+            <SideBar path_reader path_writer />
             <main class="main-content">
             <div class="editor-header">
                 {
-                    move || match a.get().and_then(|v| v.last().cloned()) {
+                    move || match a.get().and_then(|(v, _)| v.last().cloned()) {
                         Some(p) => view! { <span class="editor-title"> { p } </span> }.into_any(),
                         None =>  view! { <span class="editor-title">"loading"</span> }.into_any(),
                     }
                 }
             </div>
-            <div class="editor-container">
-                <textarea class="text-field" placeholder="Start typing your notes here..."></textarea>
-            </div>
+            <Editor path_reader/>
         </main>
         </div>
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[component]
+pub fn Editor(path_reader: PathReader) -> impl IntoView {
+    let file = LocalResource::new(move || async move {
+        if path_reader.get().1 != PathType::File {
+            None
+        } else if let Some(file_path) = path_reader.get().0.last().cloned() {
+            call_tauri::<Option<String>>("file", FileRequest { path: file_path })
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        }
+    });
+    view! {
+        {
+            move || match file.get() {
+                Some(file) => view! {
+                     <div class="editor-container">
+                        <textarea class="text-field" placeholder="Start typing your notes here...">{file}</textarea>
+                    </div>
+                }.into_any(),
+                None => view! { <p> No File Loaded </p> }.into_any(),
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+enum PathType {
+    Directory,
+    File,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
 struct FileRequest {
     path: String,
 }
@@ -87,49 +106,51 @@ struct FileRequest {
 pub struct File {
     name: String,
     // path: Vec<String>,
-    directory: bool,
+    path_type: PathType,
 }
 
 #[component]
-pub fn SideBar(path: ReadSignal<Vec<String>>, set_path: WriteSignal<Vec<String>>) -> impl IntoView {
-    let data = LocalResource::new(move || async move {
-        call_tauri::<Vec<File>>(
-            "files",
-            FileRequest {
-                path: editor_path::get(path),
-            },
-        )
-        .await
-        .unwrap()
+pub fn SideBar(path_reader: PathReader, path_writer: PathWriter) -> impl IntoView {
+    let (files, set_files) = signal(vec![]);
+    // Use a Localresource
+    spawn_local(async move {
+        let (path, path_type) = (move || path_reader.get())();
+        log!("{:?}", path);
+        if path_type == PathType::Directory {
+            if let Ok(Some(new_files)) =
+                call_tauri::<Option<Vec<File>>>("files", FileRequest { path: get(path) }).await
+            {
+                set_files.set(new_files);
+            }
+        }
     });
     view! {
         <aside class="sidebar">
-                <div class="sidebar-header">
-                    FILES
-                </div>
-                <div class="sidebar-container">
-                <button on:click=move |_| editor_path::pop(set_path)>"Pop"</button>
-                <button on:click=move |_| set_path.set((0..10).into_iter().map(|n| n.to_string()).collect())>"Load"</button>
+            <div class="sidebar-header">
+                <button class="sidebar-back-button" on:click=move |_| path_writer.update(|(path, _)| if path.len() > 2 { path.pop(); })>"◀"</button>
+                <h3 class="sidebar-header-name"> "Files" </h3>
+            </div>
+            <div class="sidebar-container">
                 {
-                    move || match data.get() {
-                        Some(result) => result.into_iter().map(|file| view! { <SideBarItem file path=set_path /> }).collect_view().into_any(),
-                        None => view! { <p> "loading" </p>}.into_any()
-                    }
+                    move || files.get().into_iter().map(|file| view! { <SideBarItem file path_writer /> }).collect_view()
                 }
-                </div>
-            </aside>
-
-
+            </div>
+        </aside>
     }
 }
 
 #[component]
-pub fn SideBarItem(file: File, path: WriteSignal<Vec<String>>) -> impl IntoView {
-    let icon = if file.directory { "📁" } else { "📄" };
+pub fn SideBarItem(file: File, path_writer: PathWriter) -> impl IntoView {
+    let icon = match file.path_type {
+        PathType::Directory => "📁",
+        PathType::File => "📄",
+    };
     let name = file.name.clone();
     let click = move |_| {
-        log!("cd to {}", file.name);
-        editor_path::add(path, file.name.clone());
+        path_writer.update(|(v, path_type)| {
+            v.push(file.name.clone());
+            *path_type = file.path_type.clone();
+        });
     };
     view! {
         <div class="sidebar-item" on:click=click>

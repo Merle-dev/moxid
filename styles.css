@@ -75,7 +75,12 @@ body {
     font-weight: 600;
     font-size: 0.875rem;  /* instead of 14px */
     color: #b4b4b4;
-    height: 4vh;
+    display: flex;
+    height: 5vh;
+}
+
+.sidebar-header-name {
+    margin: 0 12px;
 }
 
 .sidebar-content {
@@ -118,7 +123,7 @@ body {
     border-bottom: 0.0625rem solid #2d2d2d;
     display: flex;
     align-items: center;
-    height: 4vh;
+    height: 5vh;
     /* gap: 0.75rem;  /* instead of 12px */ */
 }
 
@@ -151,6 +156,11 @@ body {
     color: #6e6e6e;
 }
 
+.sidebar-back-button {
+    background: transparent;
+    color: white;
+    border: 0;
+}
 /* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 0.5rem;  /* instead of 8px */
